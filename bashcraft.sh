@@ -295,7 +295,7 @@ function minecraft_say() {
 	send_server_command $1 "minecraft:say $2"
 }
 
-# Send a "notice" to a server
+# Send a custom notice to a server
 # This uses tellraw to send a notice to all players
 # Arguments:
 # 1: Server
@@ -304,6 +304,18 @@ function minecraft_say() {
 function minecraft_notice() {
 	local color=${3:-"gold"}
 	send_server_command $1 "minecraft:tellraw @a {\"text\":\"$2\",\"color\":\"$color\"}"
+}
+
+# Send a custom notice to a specific player on a server
+# This is the same as minecraft_notice but with a target selector
+# Arguments:
+# 1: Server
+# 2: Target selector
+# 3: Message
+# 4: Color (optional, defaults to "gold")
+function minecraft_notice_to() {
+	local color=${4:-"gold"}
+	send_server_command $1 "minecraft:tellraw $2 {\"text\":\"$3\",\"color\":\"$color\"}"
 }
 
 # Send a "save" command to a server
@@ -329,7 +341,7 @@ function minecraft_list() {
 
 # Send a "playsound" command to a server
 # Arguments:
-# 1: Server screen name
+# 1: Server
 # 2: Sound to play
 # 3: Source of the sound
 # 4: Targets to play the sound to
@@ -354,24 +366,24 @@ function minecraft_playsound() {
 
 # Send a "summon" command to a server
 # Arguments:
-# 1: Server screen name
+# 1: Server
 # 2: Entity to summon
 # 3: X position (optional, defaults to "~")
 # 4: Y position (optional, defaults to "~")
 # 5: Z position (optional, defaults to "~")
 # 6: NBTs (optional, defaults to "")
 function minecraft_summon() {
-    local entity=$2
-    local pos_x=${3:-"~"}
-    local pos_y=${4:-"~"}
-    local pos_z=${5:-"~"}
-    local nbts="${@:6}"
-    send_server_command $1 "minecraft:summon $entity $pos_x $pos_y $pos_z $nbts"
+	local entity=$2
+	local pos_x=${3:-"~"}
+	local pos_y=${4:-"~"}
+	local pos_z=${5:-"~"}
+	local nbts="${@:6}"
+	send_server_command $1 "minecraft:summon $entity $pos_x $pos_y $pos_z $nbts"
 }
 
 # Send a "kill" command to a server
 # Arguments:
-# 1: Server screen name
+# 1: Server
 # 2: Target selector (optional, defaults to "@e")
 function minecraft_kill() {
 	local target=${2:-"@e"}
@@ -380,7 +392,7 @@ function minecraft_kill() {
 
 # Send a "data get entity" command to a server
 # Arguments:
-# 1: Server screen name
+# 1: Server
 # 2: Target selector (optional, defaults to "@n")
 # 3: Path to the data
 function minecraft_data_get_entity() {
@@ -394,7 +406,7 @@ function minecraft_data_get_entity() {
 
 # Send an "effect" command to a server
 # Arguments:
-# 1: Server screen name
+# 1: Server
 # 2: State (optional, defaults to "give")
 # 3: Target selector (optional, defaults to "@a")
 # 4: Effect
@@ -413,7 +425,7 @@ function minecraft_effect() {
 
 # Send a "particle" command to a server
 # Arguments:
-# 1: Server screen name
+# 1: Server
 # 2: Particle name (optional, defaults to "minecraft:poof")
 # 3: X position (optional, defaults to "~")
 # 4: Y position (optional, defaults to "~")
@@ -438,4 +450,132 @@ function minecraft_particle() {
 	local mode=${11:-"normal"}
 	local viewers=${12:-"@a"}
 	send_server_command $1 "minecraft:particle $particle $pos_x $pos_y $pos_z $delta_x $delta_y $delta_z $speed $count $mode $viewers"
+}
+
+# Send "forceload" command to a server
+# Arguments:
+# 1: Server
+# 2: State add/remove
+# 3: [from] Block X position
+# 4: [from] Block Z position
+# 5: To Block X position (optional)
+# 6: To Block Z position (optional)
+function minecraft_forceload() {
+	local state=$2
+	local pos_x=$3
+	local pos_z=$4
+	local to_pos_x=$5
+	local to_pos_z=$6
+	
+	send_server_command $1 "minecraft:forceload $state $pos_x $pos_z $to_pos_x $to_pos_z"
+}
+
+# Send "forceload remove all" command to a server
+# Removes all chunks loaded with the forceload command
+# Arguments:
+# 1: Server
+function minecraft_forceload_remove_all() {
+	send_server_command $1 "minecraft:forceload remove all"
+}
+
+# Send "set block" command to a server
+# Will forceload the chunk if needed
+# Arguments:
+# 1: Server
+# 2: X position
+# 3: Y position
+# 4: Z position
+# 5: Block (optional, defaults to "minecraft:dirt")
+# 6: Mode destroy/keep/replace (optional, defaults to "replace")
+function minecraft_set_block() {
+	local pos_x=$2
+	local pos_y=$3
+	local pos_z=$4
+	local block=${5:-"minecraft:dirt"}
+	local mode=${6:-"replace"}
+	local result
+	local need_retry=true
+	
+	while [[ "$need_retry" == true ]]; do
+		need_retry=false
+		
+		result=$(send_server_command_await_output $1 "minecraft:setblock $pos_x $pos_y $pos_z $block $mode")
+		
+		# If the result is "That position is not loaded" we load the position and try again
+		#echo "DEBUG: result is $result" >&2
+		if [[ "$result" = "That position is not loaded" ]]; then
+			minecraft_forceload $1 "add" $pos_x $pos_z
+			need_retry=true
+		#elif [[ "$result" = "Could not set the block" ]]; then
+			# 99% of the time this means that the block is the same as the one already there
+		fi
+	done
+}
+
+# Send "fill" command to a server
+# Arguments:
+# 1: Server
+# 2: From X position
+# 3: From Y position
+# 4: From Z position
+# 5: To X position
+# 6: To Y position
+# 7: To Z position
+# 8: Block
+# 9: Mode destroy/hollow/keep/outline/replace (optional, defaults to "replace")
+# 10: Filter (when using mode "replace")
+function minecraft_fill() {
+	local from_pos_x=$2
+	local from_pos_y=$3
+	local from_pos_z=$4
+	local to_pos_x=$5
+	local to_pos_y=$6
+	local to_pos_z=$7
+	local block=$8
+	local mode=${9:-"replace"}
+	local filter_block=${10:-""}
+	local result
+	local need_retry=true
+	
+	while [[ "$need_retry" == true ]]; do
+		need_retry=false
+		
+		result=$(send_server_command_await_output $1 "minecraft:fill $from_pos_x $from_pos_y $from_pos_z $to_pos_x $to_pos_y $to_pos_z $block $mode $filter_block" '' '(Successfully filled \d+ block(s)|No blocks were filled)' '')
+		
+		# If the result is "That position is not loaded" we load the position and try again
+		echo "DEBUG: result is $result" >&2
+		if [[ "$result" = "That position is not loaded" ]]; then
+			minecraft_forceload $1 "add" $from_pos_x $from_pos_z $to_pos_x $to_pos_z
+			need_retry=true
+		fi
+	done
+}
+
+# Send a "kick" command to a server
+# Arguments:
+# 1: Server
+# 2: Target selector
+# 3: Reason (optional)
+function minecraft_kick() {
+	local target=$2
+	local reason=${3:-""}
+	send_server_command $1 "minecraft:kick $target $reason"
+}
+
+# Send a "teleport" command to a server
+# Arguments:
+# 1: Server
+# 2: Target selector
+# 3: X position
+# 4: Y position
+# 5: Z position
+# 6: Yaw (optional)
+# 7: Pitch (optional)
+function minecraft_teleport() {
+	local target=$2
+	local pos_x=${3:-"~"}
+	local pos_y=${4:-"~"}
+	local pos_z=${5:-"~"}
+	local facing=${@:6}
+	send_server_command $1 "minecraft:teleport $target $pos_x $pos_y $pos_z $facing"
 }

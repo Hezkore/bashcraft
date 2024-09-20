@@ -75,18 +75,21 @@ minecraft_summon $server "minecraft:zombie" "0" "80" "0" "{CustomName:'\"My Zomb
 sleep 1
 
 # Get the health of the zombie based on type, position and distance
-echo "Health of the zombie: $(minecraft_data_get_entity $server "@n" "type=minecraft:zombie" "x=0" "y=80" "z=0" "distance=..10" "Health")"
+echo "Health of the zombie: $(minecraft_data_get_entity $server "@n[type=minecraft:zombie]" "x=0" "y=80" "z=0" "distance=..10" "Health")"
 
 # Get the UUID of the zombie based on the name we gave it
-zombie_uuid=($(minecraft_data_get_entity $server "@n" "name=\"My Zombie\"" "UUID"))
+zombie_uuid=($(minecraft_data_get_entity $server "@n[name=\"My Zombie\"]" "UUID"))
 zombie_uuid="$(array_to_string "${zombie_uuid[@]}" ",")"
 echo "UUID of the zombie: $zombie_uuid"
 
 # Make the zombie invisible forever with an amplifier of 0, effect is hidden, based on UUID
 echo "Making the zombie invisible"
-minecraft_effect $server "give" "@e" "nbt={UUID:[I;$zombie_uuid]}" "minecraft:invisibility" "infinite" 0 true
+minecraft_effect $server "give" "@e[nbt={UUID:[I;$zombie_uuid]}]" "minecraft:invisibility" "infinite" 0 true
 sleep 1
 
 # Kill the zombie based on UUID
 echo "Killing the zombie"
-minecraft_kill $server "@e" "nbt={UUID:[I;$zombie_uuid]}"
+minecraft_kill $server "@e[nbt={UUID:[I;$zombie_uuid]}]"
+
+# Done
+exit 0

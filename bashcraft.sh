@@ -287,12 +287,20 @@ function send_server_command_await_output() {
 # = Minecraft wrapper functions ================================================
 
 # Send the "say" command to a server
+# Text seen by all players
+# Arguments:
+# 1: Server
+# 2: Message
 function minecraft_say() {
 	send_server_command $1 "minecraft:say $2"
 }
 
 # Send a "notice" to a server
 # This uses tellraw to send a notice to all players
+# Arguments:
+# 1: Server
+# 2: Message
+# 3: Color (optional, defaults to "gold")
 function minecraft_notice() {
 	local color=${3:-"gold"}
 	send_server_command $1 "minecraft:tellraw @a {\"text\":\"$2\",\"color\":\"$color\"}"
@@ -300,12 +308,16 @@ function minecraft_notice() {
 
 # Send a "save" command to a server
 # Waits for the save to complete
+# Arguments:
+# 1: Server
 function minecraft_save_all() {
 	local result=$(send_server_command_await_output $1 "minecraft:save-all" '' 'Saved the game' 'Saving the game .*')
 }
 
 # Send a "list" command to a server
 # Returns an array of players online
+# Arguments:
+# 1: Server
 function minecraft_list() {
 	local result=$(send_server_command_await_output $1 "minecraft:list" 'There are [0-9]+ of a max of [0-9]+ players online: ')
 	# Extract the player names after "online: " and split by spaces
@@ -341,46 +353,78 @@ function minecraft_playsound() {
 }
 
 # Send a "summon" command to a server
+# Arguments:
+# 1: Server screen name
+# 2: Entity to summon
+# 3: X position (optional, defaults to "~")
+# 4: Y position (optional, defaults to "~")
+# 5: Z position (optional, defaults to "~")
+# 6: NBTs (optional, defaults to "")
 function minecraft_summon() {
-	local entity=$2
-	local pos_x=${3:-"~"}
-	local pos_y=${4:-"~"}
-	local pos_z=${5:-"~"}
-	local nbts=${6:-""}
-	send_server_command $1 "minecraft:summon $entity $pos_x $pos_y $pos_z $nbts"
+    local entity=$2
+    local pos_x=${3:-"~"}
+    local pos_y=${4:-"~"}
+    local pos_z=${5:-"~"}
+    local nbts="${@:6}"
+    send_server_command $1 "minecraft:summon $entity $pos_x $pos_y $pos_z $nbts"
 }
 
 # Send a "kill" command to a server
+# Arguments:
+# 1: Server screen name
+# 2: Target selector (optional, defaults to "@e")
 function minecraft_kill() {
 	local target=${2:-"@e"}
-	local selector=$(IFS=','; echo "${*:3}")
-	send_server_command $1 "minecraft:kill $target[$selector]"
+	send_server_command $1 "minecraft:kill $target"
 }
 
 # Send a "data get entity" command to a server
+# Arguments:
+# 1: Server screen name
+# 2: Target selector (optional, defaults to "@n")
+# 3: Path to the data
 function minecraft_data_get_entity() {
 	local target=${2:-"@n"}
-	local selector=$(IFS=','; echo "${*:3:$#-3}") # This takes every item except the last one
-	local path=${@: -1} # This takes the last item
-	local result=$(send_server_command_await_output $1 "minecraft:data get entity $target[$selector] $path" '.* has the following entity data: ')
+	local path=$3
+	local result=$(send_server_command_await_output $1 "minecraft:data get entity $target $path" '.* has the following entity data: ')
 	local processed_result=$(echo "$result" | sed 's/.*entity data: //')
 	local cleaned_result=$(clean_minecraft_data_type "$processed_result")
 	echo "$cleaned_result"
 }
 
 # Send an "effect" command to a server
+# Arguments:
+# 1: Server screen name
+# 2: State (optional, defaults to "give")
+# 3: Target selector (optional, defaults to "@a")
+# 4: Effect
+# 5: Duration (optional, defaults to "infinite")
+# 6: Amplifier (optional, defaults to 0)
+# 7: Hidden (optional, defaults to false)
 function minecraft_effect() {
 	local state=${2:-"give"}
 	local target=${3:-"@a"}
-	local effect=${@: -4:1}
-	local duration=${@: -3:1}
-	local amplifier=${@: -2:1}
-	local hidden=${@: -1}
-	local selector=$(IFS=','; echo "${*:4:$#-7}")
-	send_server_command $1 "minecraft:effect $state $target[$selector] $effect $duration $amplifier $hidden"
+	local effect=$4
+	local duration=${5:-"infinite"}
+	local amplifier=${6:-0}
+	local hidden=${7:-false}
+	send_server_command $1 "minecraft:effect $state $target $effect $duration $amplifier $hidden"
 }
 
 # Send a "particle" command to a server
+# Arguments:
+# 1: Server screen name
+# 2: Particle name (optional, defaults to "minecraft:poof")
+# 3: X position (optional, defaults to "~")
+# 4: Y position (optional, defaults to "~")
+# 5: Z position (optional, defaults to "~")
+# 6: Delta X (optional, defaults to 0)
+# 7: Delta Y (optional, defaults to 0)
+# 8: Delta Z (optional, defaults to 0)
+# 9: Speed (optional, defaults to 0.1)
+# 10: Count (optional, defaults to 50)
+# 11: Mode (optional, defaults to "normal")
+# 12: Viewers (optional, defaults to "@a")
 function minecraft_particle() {
 	local particle=${2:-"minecraft:poof"}
 	local pos_x=${3:-"~"}

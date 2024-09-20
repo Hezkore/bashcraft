@@ -598,16 +598,19 @@ function minecraft_bossbar() {
 	local target=$6
 	local value=$7
 	local visible=$8
-	local result=$(send_server_command $1 "minecraft:bossbar $state $id \"$name\" $max_value $target $value $visible")
+	local result=$(send_server_command_await_output $1 "minecraft:bossbar $state $id \"$name\" $max_value $target $value $visible" "(A bossbar already exists with the ID 'minecraft:$id'|Created custom bossbar \[$name\])")
 	
-	# Add to the bossbar list
-	if [[ "$state" == "add" ]]; then
-		server_bossbars[$1]+="$id "
-	fi
-	
-	# Remove from the bossbar list
-	if [[ "$state" == "remove" ]]; then
-		server_bossbars[$1]=$(echo "${server_bossbars[$1]}" | sed "s/$id //")
+	# If the add was a success, store the bossbar ID
+	if [[ "$result" = "Created custom bossbar [$name]" ]]; then
+		# Add to the bossbar list
+		if [[ "$state" == "add" ]]; then
+			server_bossbars[$1]+="$id "
+		fi
+		
+		# Remove from the bossbar list
+		if [[ "$state" == "remove" ]]; then
+			server_bossbars[$1]=$(echo "${server_bossbars[$1]}" | sed "s/$id //")
+		fi
 	fi
 }
 

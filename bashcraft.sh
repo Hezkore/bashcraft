@@ -15,6 +15,7 @@ declare -A server_working_dir
 declare -A server_latest_log_file
 declare -A server_pid
 declare -A server_aliases
+declare -A server_bossbars
 
 # Set screen commands to use sudo
 function use_screen_sudo() {
@@ -502,7 +503,6 @@ function minecraft_set_block() {
 		result=$(send_server_command_await_output $1 "minecraft:setblock $pos_x $pos_y $pos_z $block $mode")
 		
 		# If the result is "That position is not loaded" we load the position and try again
-		#echo "DEBUG: result is $result" >&2
 		if [[ "$result" = "That position is not loaded" ]]; then
 			minecraft_forceload $1 "add" $pos_x $pos_z
 			need_retry=true
@@ -543,7 +543,6 @@ function minecraft_fill() {
 		result=$(send_server_command_await_output $1 "minecraft:fill $from_pos_x $from_pos_y $from_pos_z $to_pos_x $to_pos_y $to_pos_z $block $mode $filter_block" '' '(Successfully filled \d+ block(s)|No blocks were filled)' '')
 		
 		# If the result is "That position is not loaded" we load the position and try again
-		echo "DEBUG: result is $result" >&2
 		if [[ "$result" = "That position is not loaded" ]]; then
 			minecraft_forceload $1 "add" $from_pos_x $from_pos_z $to_pos_x $to_pos_z
 			need_retry=true
@@ -578,4 +577,72 @@ function minecraft_teleport() {
 	local pos_z=${5:-"~"}
 	local facing=${@:6}
 	send_server_command $1 "minecraft:teleport $target $pos_x $pos_y $pos_z $facing"
+}
+
+# Send a "bossbar" command to a server
+# Locally stores the bossbar ID in an associative array
+# Arguments:
+# 1: Server
+# 2: State add/remove/set/get
+# 3: ID
+# 4: Name
+# 5: Max Value
+# 6: Target selector
+# 7: Value
+# 8: Visible (optional, defaults to true)
+function minecraft_bossbar() {
+	local state=$2
+	local id=$3
+	local name=$4
+	local max_value=$5
+	local target=$6
+	local value=$7
+	local visible=$8
+	local result=$(send_server_command $1 "minecraft:bossbar $state $id \"$name\" $max_value $target $value $visible")
+	
+	# Add to the bossbar list
+	if [[ "$state" == "add" ]]; then
+		server_bossbars[$1]+="$id "
+	fi
+	
+	# Remove from the bossbar list
+	if [[ "$state" == "remove" ]]; then
+		server_bossbars[$1]=$(echo "${server_bossbars[$1]}" | sed "s/$id //")
+	fi
+}
+
+# Returns the cached bossbars for a server
+function minecraft_bossbar_list() {
+	# Get from associative array
+	echo "${server_bossbars[$1]}"
+}
+
+# Send a "bossbar remove" command to a server
+# Optionally removes all bossbars
+# Arguments:
+# 1: Server
+# 2: ID (optional, defaults to all)
+function minecraft_bossbar_remove() {
+	local id=$2
+	# Do we have an ID?
+	if [[ -n "$id" ]]; then
+		send_server_command $1 "minecraft:bossbar remove $id"
+	else
+		# Remove all bossbars
+		local bossbars=($(minecraft_bossbar_list $1))
+		for bossbar in "${bossbars[@]}"; do
+			send_server_command $1 "minecraft:bossbar remove $bossbar"
+		done
+	fi
+}
+
+# Send a "weather" command to a server
+# Arguments:
+# 1: Server
+# 2: State clear/rain/thunder
+# 3: Duration #(default: ticks)/#d(in-game days)/#s(real-time seconds) (optional)
+function minecraft_weather() {
+	local state=$2
+	local duration=$3
+	send_server_command $1 "minecraft:weather $state $duration"
 }

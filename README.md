@@ -23,3 +23,6 @@ Bashcraft will automatically read the log output and process it for you.
 #### Done!
 
 Check out the `examples` directory to see how to use Bashcraft.
+
+## Known issues
+* Most wrapper functions expect the command to execute successfully. A message will display if they get stuck waiting for a response from the server.

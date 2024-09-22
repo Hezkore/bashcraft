@@ -49,8 +49,8 @@ echo "Save complete"
 
 # Get online players
 echo "Players online:"
-players=($(minecraft_list $server))
-for player in ${players[@]}; do
+players=("$(minecraft_list "$server")")
+for player in "${players[@]}"; do
 	echo " - $player"
 done
 
@@ -71,25 +71,35 @@ minecraft_particle $server "minecraft:poof" "0" "82" "0"
 
 # Summon a zombie in the poof cloud
 echo "Summoning a zombie"
-minecraft_summon $server "minecraft:zombie" "0" "80" "0" "{CustomName:'\"My Zombie\"'}"
-sleep 1
-
-# Get the health of the zombie based on type, position and distance
-echo "Health of the zombie: $(minecraft_data_get_entity $server "@n[type=minecraft:zombie]" "x=0" "y=80" "z=0" "distance=..10" "Health")"
-
-# Get the UUID of the zombie based on the name we gave it
-zombie_uuid=($(minecraft_data_get_entity $server "@n[name=\"My Zombie\"]" "UUID"))
-zombie_uuid="$(array_to_string "${zombie_uuid[@]}" ",")"
+zombie_uuid=$(minecraft_summon $server "minecraft:zombie" "0" "80" "0" "{CustomName:'\"My Zombie\"'}")
 echo "UUID of the zombie: $zombie_uuid"
+
+# Get the health of the zombie
+zombie_health=$(minecraft_data_get_entity $server "@n[nbt={UUID:[I;$zombie_uuid]}]" "Health")
+echo "Health of the zombie: $zombie_health"
+
+# Create a bossbar for the zombie
+echo "Creating a bossbar for the zombie"
+bossbar=$(minecraft_bossbar_add $server "my_zombie_health" "My Zombie Health")
+
+# Show the bossbar to everyone
+echo "Configuring the bossbar"
+minecraft_bossbar_set $server $bossbar "max" $(int_of $zombie_health)
+minecraft_bossbar_set $server $bossbar "value" $(int_of $zombie_health)
+minecraft_bossbar_set $server $bossbar "players" "@a"
+sleep 2
 
 # Make the zombie invisible forever with an amplifier of 0, effect is hidden, based on UUID
 echo "Making the zombie invisible"
-minecraft_effect $server "give" "@e[nbt={UUID:[I;$zombie_uuid]}]" "minecraft:invisibility" "infinite" 0 true
-sleep 1
+minecraft_effect $server "give" "@n[nbt={UUID:[I;$zombie_uuid]}]" "minecraft:invisibility" "infinite" 0 true
 
 # Kill the zombie based on UUID
 echo "Killing the zombie"
 minecraft_kill $server "@e[nbt={UUID:[I;$zombie_uuid]}]"
+
+# Remove the bossbar
+echo "Removing the bossbar"
+minecraft_bossbar_remove $server $bossbar
 
 # Done
 exit 0

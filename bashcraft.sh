@@ -3,6 +3,8 @@
 
 BASHCRAFT_VERSION="0.1"
 
+READ_SLEEP_TIME=0.0001
+
 # = Raw functions ==============================================================
 
 # Run external commands with sudo?
@@ -160,6 +162,13 @@ function clean_minecraft_data_type() {
 	fi
 }
 
+# Takes a decimal value and returns an integer value
+function int_of() {
+	local decimal="$1"
+	local integer=$(printf "%.0f" "$decimal")
+	echo "$integer"
+}
+
 # Turns an array into a string with the specified separator (optional, defaults to comma)
 function array_to_string() {
 	local separator=","
@@ -183,13 +192,14 @@ function send_server_command() {
 	${_USE_SUDO} screen -S $1 -X stuff "$2^M"
 }
 
-# Sends a command to the specified server screen name and returns the output
+# Send a command to the specified server screen name and return the output
 # Arguments:
-# 1: Server screen name
+# 1: Server
 # 2: Command to send
-# 3: Match regex to filter output
-# 4: End regex to stop reading output
-# 5: Retry regex to retry reading output
+# 3: Return only lines matching regex (optional)
+# 4: Stop reading matching regex (optional)
+# 5: Retry on matching regex (optional)
+# 6: Must return and retry until matching regex (optional)
 function send_server_command_await_output() {
 	# Check if the server screen name exists
 	if ! server_name_exists $1; then
@@ -200,14 +210,17 @@ function send_server_command_await_output() {
 	# Which log file are we reading from?
 	local log_file="${server_latest_log_file[$1]}"
 	
-	# Do we have a regex to match the output?
+	# Return only lines matching the regex
 	local match_regex=${3:-""}
 	
-	# Do we have an expected end line regex?
+	# Stop reading when we match the end regex
 	local end_regex=${4:-""}
 	
-	# Do we have an expected retry line regex?
+	# Retry reading when we match the retry regex
 	local retry_regex=${5:-""}
+	
+	# Must return and retry until we match the must regex
+	local must_regex=${6:-""}
 	
 	# Store the length of the log file currently
 	local current_line_count=$(wc -l < "$log_file")
@@ -217,14 +230,16 @@ function send_server_command_await_output() {
 	
 	# Wait for the log file to have MORE lines
 	while [[ $(wc -l < "$log_file") -le $current_line_count ]]; do
-		sleep 0.0005
+		sleep $READ_SLEEP_TIME
 	done
 	
 	# While we have to try, do a try
 	local needs_retry=true
 	local skip_next_line=false
 	local found_lines=()
+	local loop_count=0
 	while [[ "$needs_retry" == true ]]; do
+		loop_count=$((loop_count + 1))
 		needs_retry=false
 		found_lines=()
 		
@@ -232,6 +247,14 @@ function send_server_command_await_output() {
 		new_lines=$(tail -n $(( $(wc -l < "$log_file") - $current_line_count )) "$log_file")
 		newest_line=$(clean_log_output "$(tail -n 1 <<< "$new_lines")")
 		
+		# If the loop count is higher than 100, display new lines
+		if [[ $loop_count -gt 100 ]]; then
+			echo "Command $2 stuck in a loop" >&2
+			echo "====NEW LINES ====" >&2
+			echo "$new_lines" >&2
+			echo "====END NEW LINES====" >&2
+		fi
+		#echo "DEBUG: New lines: $new_lines" >&2
 		#echo "DEBUG: Newest line: $newest_line" >&2
 		
 		# Check if the newest line is the retry line
@@ -255,6 +278,18 @@ function send_server_command_await_output() {
 			# Skip the next line if needed
 			# This is used to skip any retry lines
 			if [[ "$skip_next_line" == false ]]; then
+				
+				# Check if the line matches the must regex if provided
+				if [[ -n "$must_regex" ]]; then
+					# If the line matches, we do not need to retry and we can stop
+					if [[ "$cleaned_line" =~ $must_regex ]]; then
+						found_lines+=("$cleaned_line")
+						needs_retry=false
+						break
+					else
+						needs_retry=true
+					fi
+				fi
 				
 				# Check if the line matches the regex if provided
 				if [[ -n "$match_regex" ]]; then
@@ -365,6 +400,20 @@ function minecraft_playsound() {
 	send_server_command $1 "minecraft:playsound $sound $source $targets $pos_x $pos_y $pos_z $volume $pitch $min_volume"
 }
 
+# Send a "data get entity" command to a server
+# Arguments:
+# 1: Server
+# 2: Target selector (optional, defaults to "@n")
+# 3: Entity data path
+function minecraft_data_get_entity() {
+	local target=${2:-"@n"}
+	local path=$3
+	local result=$(send_server_command_await_output $1 "minecraft:data get entity $target $path" '' '' '' '.* has the following entity data: ')
+	local processed_result=$(echo "$result" | sed 's/.*entity data: //')
+	local cleaned_result=$(clean_minecraft_data_type "$processed_result")
+	echo "$cleaned_result"
+}
+
 # Send a "summon" command to a server
 # Arguments:
 # 1: Server
@@ -379,7 +428,20 @@ function minecraft_summon() {
 	local pos_y=${4:-"~"}
 	local pos_z=${5:-"~"}
 	local nbts="${@:6}"
-	send_server_command $1 "minecraft:summon $entity $pos_x $pos_y $pos_z $nbts"
+	local result=$(send_server_command_await_output $1 "minecraft:summon $entity $pos_x $pos_y $pos_z $nbts" '' '' '' "(^Summoned new .*|^Can't find element '$entity' of type '.*)")
+	
+	# Did we successfully summon an entity?
+	if [[ "$result" = "Summoned new "* ]]; then
+		# Get the UUID of the entity
+		local entity_uuid=($(minecraft_data_get_entity $1 "@e[type=$entity,x=$pos_x,y=$pos_y,z=$pos_z,limit=1,sort=nearest]" "UUID"))
+		entity_uuid="$(array_to_string "${entity_uuid[@]}" ",")"
+		echo "$entity_uuid"
+		return
+	else
+		echo "ERROR: Failed to summon entity $entity" >&2
+		echo ""
+		return
+	fi
 }
 
 # Send a "kill" command to a server
@@ -389,20 +451,6 @@ function minecraft_summon() {
 function minecraft_kill() {
 	local target=${2:-"@e"}
 	send_server_command $1 "minecraft:kill $target"
-}
-
-# Send a "data get entity" command to a server
-# Arguments:
-# 1: Server
-# 2: Target selector (optional, defaults to "@n")
-# 3: Path to the data
-function minecraft_data_get_entity() {
-	local target=${2:-"@n"}
-	local path=$3
-	local result=$(send_server_command_await_output $1 "minecraft:data get entity $target $path" '.* has the following entity data: ')
-	local processed_result=$(echo "$result" | sed 's/.*entity data: //')
-	local cleaned_result=$(clean_minecraft_data_type "$processed_result")
-	echo "$cleaned_result"
 }
 
 # Send an "effect" command to a server
@@ -579,38 +627,57 @@ function minecraft_teleport() {
 	send_server_command $1 "minecraft:teleport $target $pos_x $pos_y $pos_z $facing"
 }
 
-# Send a "bossbar" command to a server
-# Locally stores the bossbar ID in an associative array
+# Send a "bossbar add" command to a server
 # Arguments:
 # 1: Server
-# 2: State add/remove/set/get
-# 3: ID
-# 4: Name
-# 5: Max Value
-# 6: Target selector
-# 7: Value
-# 8: Visible (optional, defaults to true)
-function minecraft_bossbar() {
-	local state=$2
-	local id=$3
-	local name=$4
-	local max_value=$5
-	local target=$6
-	local value=$7
-	local visible=$8
-	local result=$(send_server_command_await_output $1 "minecraft:bossbar $state $id \"$name\" $max_value $target $value $visible" "(A bossbar already exists with the ID 'minecraft:$id'|Created custom bossbar \[$name\])")
+# 2: ID
+# 3: Name
+function minecraft_bossbar_add() {
+	local id=$2
+	local name=$3
+	local result=$(send_server_command_await_output $1 "minecraft:bossbar add $id \"$name\"" "" "" "" "(A bossbar already exists with the ID 'minecraft:$id'|Created custom bossbar \[$name\])")
 	
-	# If the add was a success, store the bossbar ID
-	if [[ "$result" = "Created custom bossbar [$name]" ]]; then
-		# Add to the bossbar list
-		if [[ "$state" == "add" ]]; then
-			server_bossbars[$1]+="$id "
-		fi
-		
-		# Remove from the bossbar list
-		if [[ "$state" == "remove" ]]; then
-			server_bossbars[$1]=$(echo "${server_bossbars[$1]}" | sed "s/$id //")
-		fi
+	server_bossbars[$1]+="$id "
+	echo "$id"
+}
+
+# Send a "bossbar get " command to a server
+# Arguments:
+# 1: Server
+# 2: ID
+# 3: (max|players|value|visible)
+function minecraft_bossbar_get() {
+	local id=$2
+	local property=$3
+	local result=$(send_server_command_await_output $1 "minecraft:bossbar get $id $property")
+	
+	echo "$result"
+	return
+}
+
+# Send a "bossbar set" command to a server
+# Arguments:
+# 1: Server
+# 2: ID
+# 3: Property
+# 4..: Data
+function minecraft_bossbar_set() {
+	local id=$2
+	local property=$3
+	local data=${@:4}
+	local result=$(send_server_command_await_output $1 "minecraft:bossbar set $id $property $data")
+}
+
+# Send a "bossbar remove" command to a server
+# Arguments:
+# 1: Server
+# 2: ID
+function minecraft_bossbar_remove() {
+	local id=$2
+	local result=$(send_server_command_await_output $1 "minecraft:bossbar remove $id" '' '' '' '^Removed custom bossbar .*')
+	
+	if [[ "$result" = "Removed custom bossbar $id" ]]; then
+		server_bossbars[$1]=$(echo "${server_bossbars[$1]}" | sed "s/$id //")
 	fi
 }
 
@@ -632,7 +699,7 @@ function minecraft_bossbar_remove() {
 		send_server_command $1 "minecraft:bossbar remove $id"
 	else
 		# Remove all bossbars
-		local bossbars=($(minecraft_bossbar_list $1))
+		local bossbars=("$(minecraft_bossbar_list $1)")
 		for bossbar in "${bossbars[@]}"; do
 			send_server_command $1 "minecraft:bossbar remove $bossbar"
 		done
@@ -648,4 +715,43 @@ function minecraft_weather() {
 	local state=$2
 	local duration=$3
 	send_server_command $1 "minecraft:weather $state $duration"
+}
+
+# Send a "spreadplayers" command to a server
+# Arguments:
+# 1: Server
+# 2: X position
+# 3: Z position
+# 4: Spread distance
+# 5: Max range
+# 6: Respect teams (optional, defaults to false)
+# 7: Target selector (optional, defaults to "@a")
+function minecraft_spreadplayers() {
+	local pos_x=$2
+	local pos_z=$3
+	local spread_distance=$4
+	local max_range=$5
+	local respect_teams=$6
+	local target=$7
+	send_server_command $1 "minecraft:spreadplayers $pos_x $pos_z $spread_distance $max_range $respect_teams $target"
+}
+
+# Send a "spreadplayers under" command to a server
+# Arguments:
+# 1: Server
+# 2: X position
+# 3: Z position
+# 4: Spread distance
+# 5: Max range
+# 6: maxHeight
+# 7: Respect teams (optional, defaults to false)
+# 8: Target selector (optional, defaults to "@a")
+function minecraft_spreadplayers_under() {
+	local pos_x=$2
+	local pos_z=$3
+	local spread_distance=$4
+	local max_range=$5
+	local respect_teams=$6
+	local target=$7
+	send_server_command $1 "minecraft:spreadplayers $pos_x $pos_z $spread_distance $max_range under $respect_teams $target"
 }

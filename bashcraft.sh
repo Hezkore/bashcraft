@@ -2,8 +2,8 @@
 # A collection of functions to interact with Minecraft servers running in screen
 
 BASHCRAFT_VERSION="0.1"
-
 READ_SLEEP_TIME=0.0001
+LOG_FILE_PATH="/logs/latest.log"
 
 # = Raw functions ==============================================================
 
@@ -49,24 +49,35 @@ function fetch_screen_servers() {
 	
 	# Cache the server screen names
 	for screen in "${screens[@]}"; do
-		server_names[$screen]=$screen
+		add_screen_server "$screen"
 	done
-	
-	# Cache the working directory for each server screen
-	for screen in "${screens[@]}"; do
-		_cache_server_working_dir $screen
-	done
-	
-	# Cache the latest log file path for each server screen
-	for screen in "${screens[@]}"; do
-		_cache_server_latest_log_file $screen
-	done
+}
+
+# Manually add a server screen
+function add_screen_server() {
+    local screen=$1
+
+    # Check if a screen name is provided
+    if [[ -z "$screen" ]]; then
+        # If not, print an error message and return 1 (Error)
+        echo "No screen name specified"
+        return 1
+    fi
+
+    # Store the screen name in the server_names array
+    server_names[$screen]="$screen"
+
+    # Cache the working directory for this screen
+    _cache_server_working_dir "$screen"
+
+    # Cache the latest log file for this screen
+    _cache_server_latest_log_file "$screen"
 }
 
 # Internal function to cache the working directory for a server screen
 function _cache_server_working_dir() {
 	# Look for the screen name in the associative array
-	if [[ ! -n "${server_working_dir[$1]}" ]]; then
+	if [[ -z "${server_working_dir[$1]}" ]]; then
 		local pid=$(${_USE_SUDO} screen -ls | grep "${1}" | awk '{print $1}' | cut -d. -f1)
 		if [ -n "$pid" ]; then
 			server_pid[$1]=$pid
@@ -77,8 +88,7 @@ function _cache_server_working_dir() {
 
 # Internal function to cache the latest log file path for a server screen
 function _cache_server_latest_log_file() {
-	# Just get the working directory and append "log/latest.log"
-	server_latest_log_file[$1]="${server_working_dir[$1]}/logs/latest.log"
+	server_latest_log_file[$1]="${server_working_dir[$1]}${LOG_FILE_PATH}"
 }
 
 # Set an alias for a server screen name
@@ -164,9 +174,7 @@ function clean_minecraft_data_type() {
 
 # Takes a decimal value and returns an integer value
 function int_of() {
-	local decimal="$1"
-	local integer=$(printf "%.0f" "$decimal")
-	echo "$integer"
+	echo "${1%%.*}"
 }
 
 # Turns an array into a string with the specified separator (optional, defaults to comma)
@@ -193,13 +201,14 @@ function send_server_command() {
 }
 
 # Send a command to the specified server screen name and return the output
+# Uses POSIX extended regular expressions (ERE) in Bash
 # Arguments:
 # 1: Server
 # 2: Command to send
-# 3: Return only lines matching regex (optional)
-# 4: Stop reading matching regex (optional)
-# 5: Retry on matching regex (optional)
-# 6: Must return and retry until matching regex (optional)
+# 3: Regex for lines that must be returned; reloads file until found (optional, returns to eof by default)
+# 4: Regex for lines that may only be returned (optional, returns everything by default, set to || to match 'must return' regex)
+# 5: Regex for newest line retry; checks the newest line and reloads file if match (optional)
+# 6: Regex for line that instantly ends the file read (optional)
 function send_server_command_await_output() {
 	# Check if the server screen name exists
 	if ! server_name_exists $1; then
@@ -210,20 +219,25 @@ function send_server_command_await_output() {
 	# Which log file are we reading from?
 	local log_file="${server_latest_log_file[$1]}"
 	
-	# Return only lines matching the regex
-	local match_regex=${3:-""}
+	# Must return and retry until we match the must regex
+	local must_regex=${3:-""}
 	
-	# Stop reading when we match the end regex
-	local end_regex=${4:-""}
+	# Return only lines matching the regex
+	local match_regex=${4:-""}
 	
 	# Retry reading when we match the retry regex
 	local retry_regex=${5:-""}
 	
-	# Must return and retry until we match the must regex
-	local must_regex=${6:-""}
+	# Stop reading when we match the end regex
+	local end_regex=${6:-""}
 	
 	# Store the length of the log file currently
 	local current_line_count=$(wc -l < "$log_file")
+	
+	# Check if match regex is "||"
+	if [[ "$match_regex" == "||" ]]; then
+		match_regex=$must_regex
+	fi
 	
 	# Execute the command
 	${_USE_SUDO} screen -S $1 -X stuff "$2^M"
@@ -283,9 +297,8 @@ function send_server_command_await_output() {
 				if [[ -n "$must_regex" ]]; then
 					# If the line matches, we do not need to retry and we can stop
 					if [[ "$cleaned_line" =~ $must_regex ]]; then
-						found_lines+=("$cleaned_line")
 						needs_retry=false
-						break
+						must_regex=""
 					else
 						needs_retry=true
 					fi
@@ -359,7 +372,7 @@ function minecraft_notice_to() {
 # Arguments:
 # 1: Server
 function minecraft_save_all() {
-	local result=$(send_server_command_await_output $1 "minecraft:save-all" '' 'Saved the game' 'Saving the game .*')
+	local result=$(send_server_command_await_output $1 "minecraft:save-all" "Saved the game")
 }
 
 # Send a "list" command to a server
@@ -367,7 +380,7 @@ function minecraft_save_all() {
 # Arguments:
 # 1: Server
 function minecraft_list() {
-	local result=$(send_server_command_await_output $1 "minecraft:list" 'There are [0-9]+ of a max of [0-9]+ players online: ')
+	local result=$(send_server_command_await_output $1 "minecraft:list" "There are [0-9]+ of a max of [0-9]+ players online: " "||")
 	# Extract the player names after "online: " and split by spaces
 	players=($(echo "$result" | sed 's/.*online: //'))
 	
@@ -408,7 +421,7 @@ function minecraft_playsound() {
 function minecraft_data_get_entity() {
 	local target=${2:-"@n"}
 	local path=$3
-	local result=$(send_server_command_await_output $1 "minecraft:data get entity $target $path" '' '' '' '.* has the following entity data: ')
+	local result=$(send_server_command_await_output $1 "minecraft:data get entity $target $path" ".* has the following entity data: " "||")
 	local processed_result=$(echo "$result" | sed 's/.*entity data: //')
 	local cleaned_result=$(clean_minecraft_data_type "$processed_result")
 	echo "$cleaned_result"
@@ -428,7 +441,7 @@ function minecraft_summon() {
 	local pos_y=${4:-"~"}
 	local pos_z=${5:-"~"}
 	local nbts="${@:6}"
-	local result=$(send_server_command_await_output $1 "minecraft:summon $entity $pos_x $pos_y $pos_z $nbts" '' '' '' "(^Summoned new .*|^Can't find element '$entity' of type '.*)")
+	local result=$(send_server_command_await_output $1 "minecraft:summon $entity $pos_x $pos_y $pos_z $nbts" "(^Summoned new .*|^Can't find element '$entity' of type '.*)" "||")
 	
 	# Did we successfully summon an entity?
 	if [[ "$result" = "Summoned new "* ]]; then
@@ -548,6 +561,7 @@ function minecraft_set_block() {
 	while [[ "$need_retry" == true ]]; do
 		need_retry=false
 		
+		# TODO: regex for must return
 		result=$(send_server_command_await_output $1 "minecraft:setblock $pos_x $pos_y $pos_z $block $mode")
 		
 		# If the result is "That position is not loaded" we load the position and try again
@@ -588,14 +602,22 @@ function minecraft_fill() {
 	while [[ "$need_retry" == true ]]; do
 		need_retry=false
 		
-		result=$(send_server_command_await_output $1 "minecraft:fill $from_pos_x $from_pos_y $from_pos_z $to_pos_x $to_pos_y $to_pos_z $block $mode $filter_block" '' '(Successfully filled \d+ block(s)|No blocks were filled)' '')
+		result=$(send_server_command_await_output $1 "minecraft:fill $from_pos_x $from_pos_y $from_pos_z $to_pos_x $to_pos_y $to_pos_z $block $mode $filter_block" "(Successfully filled [0-9]+ block\(s\)|No blocks were filled|Unknown block type '$block'|That position is not loaded)" "||")
 		
 		# If the result is "That position is not loaded" we load the position and try again
 		if [[ "$result" = "That position is not loaded" ]]; then
 			minecraft_forceload $1 "add" $from_pos_x $from_pos_z $to_pos_x $to_pos_z
 			need_retry=true
+			continue
+		fi
+		
+		# If it was "Unknown block type ..." we return an error
+		if [[ "$result" = "Unknown block type '$block'" ]]; then
+			return 1
 		fi
 	done
+	
+	return 0
 }
 
 # Send a "kick" command to a server
@@ -635,7 +657,7 @@ function minecraft_teleport() {
 function minecraft_bossbar_add() {
 	local id=$2
 	local name=$3
-	local result=$(send_server_command_await_output $1 "minecraft:bossbar add $id \"$name\"" "" "" "" "(A bossbar already exists with the ID 'minecraft:$id'|Created custom bossbar \[$name\])")
+	local result=$(send_server_command_await_output $1 "minecraft:bossbar add $id \"$name\"" "(A bossbar already exists with the ID 'minecraft:$id'|Created custom bossbar \[$name\])")
 	
 	server_bossbars[$1]+="$id "
 	echo "$id"
@@ -649,6 +671,7 @@ function minecraft_bossbar_add() {
 function minecraft_bossbar_get() {
 	local id=$2
 	local property=$3
+	# TODO: regex for must return
 	local result=$(send_server_command_await_output $1 "minecraft:bossbar get $id $property")
 	
 	echo "$result"
@@ -674,7 +697,8 @@ function minecraft_bossbar_set() {
 # 2: ID
 function minecraft_bossbar_remove() {
 	local id=$2
-	local result=$(send_server_command_await_output $1 "minecraft:bossbar remove $id" '' '' '' '^Removed custom bossbar .*')
+	# TODO: update regex must to match fail
+	local result=$(send_server_command_await_output $1 "minecraft:bossbar remove $id" "Removed custom bossbar .*" "||")
 	
 	if [[ "$result" = "Removed custom bossbar $id" ]]; then
 		server_bossbars[$1]=$(echo "${server_bossbars[$1]}" | sed "s/$id //")

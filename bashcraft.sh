@@ -55,23 +55,23 @@ function fetch_screen_servers() {
 
 # Manually add a server screen
 function add_screen_server() {
-    local screen=$1
+	local screen=$1
 
-    # Check if a screen name is provided
-    if [[ -z "$screen" ]]; then
-        # If not, print an error message and return 1 (Error)
-        echo "No screen name specified"
-        return 1
-    fi
-
-    # Store the screen name in the server_names array
-    server_names[$screen]="$screen"
-
-    # Cache the working directory for this screen
-    _cache_server_working_dir "$screen"
-
-    # Cache the latest log file for this screen
-    _cache_server_latest_log_file "$screen"
+	# Check if a screen name is provided
+	if [[ -z "$screen" ]]; then
+		# If not, print an error message and return 1 (Error)
+		echo "No screen name specified"
+		return 1
+	fi
+	
+	# Store the screen name in the server_names array
+	server_names[$screen]="$screen"
+	
+	# Cache the working directory for this screen
+	_cache_server_working_dir "$screen"
+	
+	# Cache the latest log file for this screen
+	_cache_server_latest_log_file "$screen"
 }
 
 # Internal function to cache the working directory for a server screen
@@ -124,7 +124,11 @@ function get_server_latest_log_file() {
 
 # Verify if a server screen name exists
 function server_name_exists() {
-	${_USE_SUDO} screen -ls | grep -q "$1"
+	if ${_USE_SUDO} screen -ls | grep -q "$1"; then
+		return 0  # Server name exists
+	else
+		return 1  # Server name does not exist
+	fi
 }
 
 # Cleans the output from the server log file
@@ -172,6 +176,11 @@ function clean_minecraft_data_type() {
 	fi
 }
 
+# Trims a string by removing leading/trailing whitespace and carriage returns/newlines
+function clean_trim() {
+	echo "$1" | tr -d '\r' | tr '\n' ' ' | sed 's/^ *//; s/ *$//'
+}
+
 # Takes a decimal value and returns an integer value
 function int_of() {
 	echo "${1%%.*}"
@@ -192,12 +201,13 @@ function array_to_string() {
 function send_server_command() {
 	# Check if the server screen name exists
 	if ! server_name_exists $1; then
-		echo ""
-		return
+		#echo ""
+		return 1
 	fi
 	
 	# Execute the command
 	${_USE_SUDO} screen -S $1 -X stuff "$2^M"
+	return 1
 }
 
 # Send a command to the specified server screen name and return the output
@@ -209,11 +219,11 @@ function send_server_command() {
 # 4: Regex for lines that may only be returned (optional, returns everything by default, set to || to match 'must return' regex)
 # 5: Regex for newest line retry; checks the newest line and reloads file if match (optional)
 # 6: Regex for line that instantly ends the file read (optional)
+# 7: Regex for lines that will be ignored (optional)
 function send_server_command_await_output() {
 	# Check if the server screen name exists
 	if ! server_name_exists $1; then
-		echo ""
-		return
+		return 1
 	fi
 	
 	# Which log file are we reading from?
@@ -230,6 +240,9 @@ function send_server_command_await_output() {
 	
 	# Stop reading when we match the end regex
 	local end_regex=${6:-""}
+	
+	# Ignore lines matching this regex
+	local ignore_regex=${7:-""}
 	
 	# Store the length of the log file currently
 	local current_line_count=$(wc -l < "$log_file")
@@ -304,6 +317,13 @@ function send_server_command_await_output() {
 					fi
 				fi
 				
+				# Check if the line matches the ignore regex if provided
+				if [[ -n "$ignore_regex" ]]; then
+					if [[ "$cleaned_line" =~ $ignore_regex ]]; then
+						continue
+					fi
+				fi
+				
 				# Check if the line matches the regex if provided
 				if [[ -n "$match_regex" ]]; then
 					if [[ "$cleaned_line" =~ $match_regex ]]; then
@@ -316,8 +336,6 @@ function send_server_command_await_output() {
 				# Check if the line matches the end regex if provided
 				if [[ -n "$end_regex" && "$cleaned_line" =~ $end_regex ]]; then
 					break
-				#else
-				#	echo "DEBUG: Line $cleaned_line does not match end regex $end_regex" >&2
 				fi
 			else
 				skip_next_line=false
@@ -778,4 +796,16 @@ function minecraft_spreadplayers_under() {
 	local respect_teams=$6
 	local target=$7
 	send_server_command $1 "minecraft:spreadplayers $pos_x $pos_z $spread_distance $max_range under $respect_teams $target"
+}
+
+# = Bukkit wrapper functions ===================================================
+
+# Send a "bukkit:plugins" command to a server
+function bukkit_plugins() {
+	# Get the result from the server command
+	local result=$(send_server_command_await_output "$1" "bukkit:plugins" "Server Plugins \([0-9]+\):" "" "" "" "(Server Plugins \([0-9]+\):|.* Plugins:)")
+	result=$(clean_trim "$result")
+	result=$(tr -d ',' <<< "$result")
+	local plugins=${result#*- }
+	echo "${plugins[@]}"
 }

@@ -67,7 +67,13 @@ for server in "${servers[@]}"; do
 done
 
 # Send a command to a server that does not exist
-echo "Response from non-existent server: $(send_server_command_await_output "non-existent-server" "say Hello, world!")"
+server="non-existent-server"
+if server_name_exists "$server"; then
+    echo "Server \"$server\" exists!"
+else
+    echo "Server \"$server\" does not exist"
+fi
+echo "Response from non-existent server: $(send_server_command_await_output "$server" "say Hello, world!")"
 
 # Done
 exit 0
